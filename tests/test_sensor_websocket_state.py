@@ -83,6 +83,7 @@ async def test_contact_sensor_opens_regardless_of_event_value(value) -> None:
 async def test_motion_sensor_maps_to_active_not_open() -> None:
     """Motion sensors need IDLE/ACTIVE, which the class-level map cannot express."""
     controller = MagicMock(spec=SensorController)
+    controller.motion_clear_s = 0.0  # compared by the controller, so a number rather than a mock
     resource = _sensor(SensorSubtype.MOTION_SENSOR)
 
     updated = await SensorController._handle_event(

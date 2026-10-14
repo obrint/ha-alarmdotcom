@@ -51,6 +51,8 @@ SENSOR_EVENT_STATE_MAP = {
 # already shut.
 OPENED_CLOSED_PULSE_S = 2.0
 
+MOTION_SUBTYPES = (SensorSubtype.MOTION_SENSOR, SensorSubtype.PANEL_MOTION_SENSOR)
+
 
 # Derived from the state map, as in every other device controller, so the
 # subscription list and the state map can no longer drift apart.
@@ -78,6 +80,13 @@ class SensorController(BaseController[Sensor]):
     # Declared on the class, not only created in __init__, so that the pulse
     # bookkeeping is visible to anything inspecting the controller's interface.
     _opened_closed_pulses: dict[str, asyncio.Task] | None = None
+
+    # Seconds after which an active motion sensor is shown idle again; 0 waits for Alarm.com's own Idle event.
+    # Alarm.com reports a motion sensor once ("Activated") and only reports Idle after it has seen no motion for a
+    # long while - 50 to 100 minutes on a NetworX panel - so without this the sensor reads "motion" for an hour
+    # after someone walked past. With it, each activation becomes a pulse of this length. Set by the integration
+    # from its options.
+    motion_clear_s: float = 0.0
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Initialize the controller and its pulse bookkeeping."""
@@ -137,7 +146,16 @@ class SensorController(BaseController[Sensor]):
                     }
                 )
 
-                if message.subtype == ResourceEventType.OpenedClosed:
+                if state == SensorState.ACTIVE and self.motion_clear_s > 0:
+                    # Covers Opened and OpenedClosed alike: either way motion was seen just now.
+                    self._schedule_opened_closed_settle(
+                        adc_resource.id,
+                        SensorState.IDLE,
+                        adc_resource.api_resource,
+                        delay_s=self.motion_clear_s,
+                        follow_refresh=False,
+                    )
+                elif message.subtype == ResourceEventType.OpenedClosed:
                     self._schedule_opened_closed_settle(
                         adc_resource.id,
                         SensorState.IDLE
@@ -165,6 +183,56 @@ class SensorController(BaseController[Sensor]):
 
         return adc_resource
 
+    ################
+    # MOTION CLEAR #
+    ################
+
+    def _keep_local_state(self, resource: Resource) -> bool:
+        """
+        Keep a motion sensor this controller cleared, rather than let a refresh show motion again.
+
+        Alarm.com keeps reporting "activated" until its own Idle, long after the clear, so applying that would turn
+        the sensor back on at every refresh. With the clear enabled, motion is shown on websocket activations only.
+        """
+        # Resource attribute keys are decamelized on parse ("deviceType" arrives as "device_type").
+        if self.motion_clear_s <= 0 or resource.attributes.get("device_type") not in [m.value for m in MOTION_SUBTYPES]:
+            return False
+
+        current = self.get(resource.id)
+
+        return (
+            current is not None
+            and current.attributes.state == SensorState.IDLE
+            and resource.attributes.get(ATTR_STATE) == SensorState.ACTIVE.value
+        )
+
+    async def _refresh(
+        self,
+        pre_fetched: list[Resource] | None = None,
+        resource_id: str | None = None,
+        fetch_started: float | None = None,
+    ) -> None:
+        """Refresh, then start the clear for any motion sensor that arrived active (e.g. at startup)."""
+
+        await super()._refresh(pre_fetched=pre_fetched, resource_id=resource_id, fetch_started=fetch_started)
+
+        if self.motion_clear_s <= 0 or self._opened_closed_pulses is None:
+            return
+
+        for sensor in self.items:
+            if (
+                sensor.subtype in MOTION_SUBTYPES
+                and sensor.attributes.state == SensorState.ACTIVE
+                and sensor.id not in self._opened_closed_pulses
+            ):
+                self._schedule_opened_closed_settle(
+                    sensor.id,
+                    SensorState.IDLE,
+                    sensor.api_resource,
+                    delay_s=self.motion_clear_s,
+                    follow_refresh=False,
+                )
+
     #######################
     # OPENED/CLOSED PULSE #
     #######################
@@ -178,14 +246,27 @@ class SensorController(BaseController[Sensor]):
             task.cancel()
 
     def _schedule_opened_closed_settle(
-        self, resource_id: str, settled_state: SensorState, opened: Resource
+        self,
+        resource_id: str,
+        settled_state: SensorState,
+        opened: Resource,
+        *,
+        delay_s: float | None = None,
+        follow_refresh: bool = True,
     ) -> None:
-        """Settle a momentary open back to closed after the pulse elapses."""
+        """
+        Settle a momentary open (or a motion activation) back to closed / idle after delay_s.
+
+        follow_refresh=True drops the settle if a refresh replaced the resource meanwhile, because the refresh is
+        newer truth. A motion clear passes False: the refresh only repeats Alarm.com's stale "activated".
+        """
         if self._opened_closed_pulses is None:
             return
 
         task = asyncio.create_task(
-            self._settle_opened_closed(resource_id, settled_state, opened)
+            self._settle_opened_closed(
+                resource_id, settled_state, opened, delay_s=delay_s, follow_refresh=follow_refresh
+            )
         )
         # Tracked alongside the controller's other background work, so a pulse
         # in flight is at least visible to anything inspecting the controller.
@@ -203,10 +284,17 @@ class SensorController(BaseController[Sensor]):
         task.add_done_callback(_forget)
 
     async def _settle_opened_closed(
-        self, resource_id: str, settled_state: SensorState, opened: Resource
+        self,
+        resource_id: str,
+        settled_state: SensorState,
+        opened: Resource,
+        *,
+        delay_s: float | None = None,
+        follow_refresh: bool = True,
     ) -> None:
-        """Write the closed half of an OpenedClosed event and publish it."""
-        await asyncio.sleep(OPENED_CLOSED_PULSE_S)
+        """Write the closed half of an OpenedClosed event (or clear a motion activation) and publish it."""
+        # Looked up here rather than used as the default, so the pulse length is read when the pulse runs.
+        await asyncio.sleep(OPENED_CLOSED_PULSE_S if delay_s is None else delay_s)
 
         adc_resource = self.get(resource_id)
 
@@ -219,7 +307,7 @@ class SensorController(BaseController[Sensor]):
         # and that newer truth wins even when it happens to say "open" too.
         # Without this check a refresh landing inside the pulse window would be
         # overwritten by a timer that no longer speaks for the device.
-        if adc_resource.api_resource is not opened:
+        if follow_refresh and adc_resource.api_resource is not opened:
             return
 
         if adc_resource.attributes.state not in (SensorState.OPEN, SensorState.ACTIVE):

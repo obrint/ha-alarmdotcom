@@ -31,6 +31,7 @@ from .const import (
     CONF_CAMERA_TOKEN_REFRESH_INTERVAL,
     CONF_FULL_STATE_POLL_INTERVAL,
     CONF_MFA_TOKEN,
+    CONF_MOTION_CLEAR_MINUTES,
     CONF_OPTIONS_DEFAULT,
     CONF_OTP,
     CONF_OTP_METHOD,
@@ -584,6 +585,15 @@ class ADCOptionsFlowHandler(config_entries.OptionsFlow):
                     ),
                 ): selector.selector(
                     {"number": {"min": 5, "max": 120, "step": 1, "unit_of_measurement": "minutes"}}
+                ),
+                vol.Required(
+                    CONF_MOTION_CLEAR_MINUTES,
+                    default=self.options.get(
+                        CONF_MOTION_CLEAR_MINUTES,
+                        CONF_OPTIONS_DEFAULT[CONF_MOTION_CLEAR_MINUTES],
+                    ),
+                ): selector.selector(
+                    {"number": {"min": 0, "max": 60, "step": 1, "unit_of_measurement": "minutes"}}
                 ),
             }
         )

@@ -70,12 +70,14 @@
                 "data": {
                     "activity_poll_interval": "Activity feed poll interval",
                     "full_state_poll_interval": "Full state refresh interval",
-                    "camera_token_refresh_interval": "Camera token refresh interval"
+                    "camera_token_refresh_interval": "Camera token refresh interval",
+                    "motion_clear_minutes": "Clear motion after"
                 },
                 "data_description": {
                     "activity_poll_interval": "Seconds between activity feed polls. Uses an undocumented endpoint; raise this if you see rate limiting.",
                     "full_state_poll_interval": "Minutes between full state refreshes, a safety net for missed push events.",
-                    "camera_token_refresh_interval": "Minutes between WebRTC token refreshes for each camera. Lower it if streams stop working before the next refresh."
+                    "camera_token_refresh_interval": "Minutes between WebRTC token refreshes for each camera. Lower it if streams stop working before the next refresh.",
+                    "motion_clear_minutes": "Minutes after which a motion sensor shows no motion again. Alarm.com only reports Idle after a long quiet spell (often an hour); 0 waits for that. Any other value turns each Alarm.com activation into a pulse of this length."
                 }
             }
         }

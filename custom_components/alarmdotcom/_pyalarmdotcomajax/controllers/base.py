@@ -42,6 +42,11 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+# How many refreshes in a row a device must be missing from before it is unregistered. Unregistering removes its
+# Home Assistant entities from the entity registry (and with them any names, areas and labels set on them), so one
+# incomplete response must not be enough; a device really removed from the account goes after this many polls.
+MISSING_REFRESHES_BEFORE_REMOVAL = 3
+
 # Declared locally rather than imported from _pyalarmdotcomajax.models, even
 # though it's the same conceptual type variable used throughout the codebase.
 # This works around a known, longstanding mypy limitation (python/mypy#11854):
@@ -151,6 +156,9 @@ class BaseController(ABC, Generic[AdcResourceT]):
         # When a WebSocket event last changed each resource (time.monotonic()). A refresh whose request was
         # sent before that moment carries an older snapshot and must not overwrite the event; see _refresh.
         self._last_event_at: dict[str, float] = {}
+
+        # Consecutive refreshes each registered resource has been missing from; see MISSING_REFRESHES_BEFORE_REMOVAL.
+        self._missing_refreshes: dict[str, int] = {}
 
     @property
     def items(self) -> list[AdcResourceT]:
@@ -341,7 +349,7 @@ class BaseController(ABC, Generic[AdcResourceT]):
         for resource in pre_fetched:
             if resource.type != self.resource_type:
                 continue
-            if self._superseded_by_event(resource.id, fetch_started):
+            if self._superseded_by_event(resource.id, fetch_started) or self._keep_local_state(resource):
                 # Still present on the account, so it must not be unregistered below.
                 discovered_resource_ids.add(resource.id)
                 continue
@@ -349,14 +357,31 @@ class BaseController(ABC, Generic[AdcResourceT]):
                 discovered_resource_ids.update({resource.id})
 
         # Unregister devices that failed to be instantiated or (in the case of multi-device endpoints) appeared in
-        # a previous API response but not the current one.
-        if resource_id:
-            # If we retrieved data for a specific device
-            if resource_id not in discovered_resource_ids:
-                await self._unregister_resource(resource_id)
-        else:
-            for missing_resource_id in self._resources.keys() - discovered_resource_ids:
-                await self._unregister_resource(missing_resource_id)
+        # a previous API response but not the current one - once they have been missing for several refreshes.
+        missing = {resource_id} - discovered_resource_ids if resource_id else self._resources.keys() - discovered_resource_ids
+
+        for found_id in discovered_resource_ids:
+            self._missing_refreshes.pop(found_id, None)
+
+        for missing_resource_id in list(missing):
+            if missing_resource_id not in self._resources:
+                continue
+
+            count = self._missing_refreshes.get(missing_resource_id, 0) + 1
+
+            if count < MISSING_REFRESHES_BEFORE_REMOVAL:
+                self._missing_refreshes[missing_resource_id] = count
+                log.warning(
+                    "[%s] %s was missing from Alarm.com's response (%s of %s before it is removed).",
+                    self.resource_type.name,
+                    missing_resource_id,
+                    count,
+                    MISSING_REFRESHES_BEFORE_REMOVAL,
+                )
+                continue
+
+            self._missing_refreshes.pop(missing_resource_id, None)
+            await self._unregister_resource(missing_resource_id)
 
     def _superseded_by_event(self, resource_id: str, fetch_started: float | None) -> bool:
         """Whether a WebSocket event changed this resource after the data being applied was requested."""
@@ -373,6 +398,15 @@ class BaseController(ABC, Generic[AdcResourceT]):
             resource_id,
         )
         return True
+
+    def _keep_local_state(self, resource: Resource) -> bool:
+        """
+        Whether a refresh should leave this already-registered resource as it is.
+
+        Intended to be overridden: the sensor controller keeps a motion sensor it cleared locally, because
+        Alarm.com goes on reporting "activated" for up to an hour after the motion stopped.
+        """
+        return False
 
     def _request_reconcile(self, reason: str) -> None:
         """Ask the bridge to re-fetch device state shortly, so an assumed or possibly missed state gets checked."""

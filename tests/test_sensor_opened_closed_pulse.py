@@ -57,6 +57,8 @@ def _controller(resource: Sensor) -> SensorController:
     """Build a controller real enough to run the pulse, faked everywhere else."""
     controller = MagicMock(spec=SensorController)
     controller._opened_closed_pulses = {}
+    # A plain number, not a mock: the controller compares it. 0 = no motion clear, the behaviour under test here.
+    controller.motion_clear_s = 0.0
     # Created in BaseController.__init__, so not part of the class spec.
     controller._background_tasks = set()
     controller.get = MagicMock(return_value=resource)
@@ -69,15 +71,15 @@ def _controller(resource: Sensor) -> SensorController:
         )
     )
     controller._schedule_opened_closed_settle = (
-        lambda resource_id, settled, opened: (
+        lambda resource_id, settled, opened, **kwargs: (
             SensorController._schedule_opened_closed_settle(
-                controller, resource_id, settled, opened
+                controller, resource_id, settled, opened, **kwargs
             )
         )
     )
     controller._settle_opened_closed = (
-        lambda resource_id, settled, opened: SensorController._settle_opened_closed(
-            controller, resource_id, settled, opened
+        lambda resource_id, settled, opened, **kwargs: SensorController._settle_opened_closed(
+            controller, resource_id, settled, opened, **kwargs
         )
     )
 

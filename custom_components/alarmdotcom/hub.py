@@ -20,6 +20,7 @@ from homeassistant.helpers.event import async_track_time_interval
 from .const import (
     CONF_FULL_STATE_POLL_INTERVAL,
     CONF_MFA_TOKEN,
+    CONF_MOTION_CLEAR_MINUTES,
     CONF_OPTIONS_DEFAULT,
     DATA_HUB,
     DOMAIN,
@@ -74,6 +75,8 @@ class AlarmHub:
             password=config_entry.data[CONF_PASSWORD],
             mfa_token=config_entry.data.get(CONF_MFA_TOKEN),
         )
+
+        self.api.sensors.motion_clear_s = 60 * float(config_entry.options.get(CONF_MOTION_CLEAR_MINUTES, 0) or 0)
 
         self.close_jobs: list[CALLBACK_TYPE] = []
         self.available: bool = True

@@ -70,6 +70,9 @@ CONF_FULL_STATE_POLL_INTERVAL = "full_state_poll_interval"  # minutes
 # not document the token lifetime; 30 minutes is the value that was hardcoded
 # before this became an option (#93).
 CONF_CAMERA_TOKEN_REFRESH_INTERVAL = "camera_token_refresh_interval"  # minutes  # noqa: S105
+# Minutes after which an active motion sensor is shown idle again; 0 waits for Alarm.com's own Idle, which can
+# take an hour (see SensorController.motion_clear_s).
+CONF_MOTION_CLEAR_MINUTES = "motion_clear_minutes"
 CONF_ARM_MODE_OPTIONS = {
     CONF_FORCE_BYPASS: "Force Bypass",
     CONF_SILENT_ARM: "Arm Silently",
@@ -84,6 +87,7 @@ CONF_OPTIONS_DEFAULT = {
     CONF_ACTIVITY_POLL_INTERVAL: 15,
     CONF_FULL_STATE_POLL_INTERVAL: 5,
     CONF_CAMERA_TOKEN_REFRESH_INTERVAL: 30,
+    CONF_MOTION_CLEAR_MINUTES: 0,
 }
 
 DATA_HUB = "connection"

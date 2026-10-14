@@ -42,7 +42,9 @@ ALL_TOKEN_T = Literal["*"]
 
 
 KEEP_ALIVE_SIGNAL_INTERVAL_S = 60
-MAX_RECONNECT_WAIT_S = 30 * 60
+# The reader never gives up (see _event_reader); this caps how long it waits between attempts, so service resumes
+# within minutes of Alarm.com or the internet coming back.
+MAX_RECONNECT_WAIT_S = 5 * 60
 
 # Alarm.com's websocket token is short-lived: the server closes the connection
 # with code 1008 ("rejected token") about five minutes after it is issued.
@@ -66,6 +68,12 @@ WS_TOKEN_LIFETIME_S = 4 * 60 + 30
 # could have retried in two. A successful handshake there takes ~150ms.
 WS_CONNECT_TIMEOUT_S = 10
 
+# How long to wait for a websocket token. The request goes to www.alarm.com, whose aiohttp defaults would allow
+# minutes per attempt, and during a planned replacement the old connection is already closed - every event in
+# that time is lost while the client still reports CONNECTED. Timing out instead takes the reconnect path, which
+# ends in RECONNECTED and a full refresh.
+WS_TOKEN_FETCH_TIMEOUT_S = 15
+
 # How many raw frames to keep for diagnostics. The old cap of 25 was useless on
 # any real account: a household with three phones reporting geofence crossings
 # (event type 555) produces a frame every few seconds, so the buffer covered
@@ -75,7 +83,6 @@ WS_CONNECT_TIMEOUT_S = 10
 # same chatty rate, something like twenty minutes of history.
 EVENT_HISTORY_MAXLEN = 500
 DEFAULT_SIGNALS_PER_SESSION_REFRESH = 1
-MAX_CONNECTION_ATTEMPTS = 25
 
 
 log = logging.getLogger(__name__)
@@ -238,7 +245,8 @@ class WebSocketClient:
             connect_attempts += 1
 
             try:
-                await self._authenticate()
+                async with asyncio.timeout(WS_TOKEN_FETCH_TIMEOUT_S):
+                    await self._authenticate()
 
                 # The clock starts here, not after the handshake: the server
                 # dates the token from when it issued it, so a slow connect
@@ -351,17 +359,17 @@ class WebSocketClient:
                 log.exception("[EVENT READER] Fatal Error")
                 raise err  # noqa: TRY201
 
-            if connect_attempts >= MAX_CONNECTION_ATTEMPTS:
-                self.stop()
+            # No attempt limit. Stopping here used to end the reader for good after 25 failures (about half an
+            # hour of an Alarm.com or internet outage) while emitting DISCONNECTED rather than DEAD, so nothing
+            # restarted it and Home Assistant kept reporting the integration available with no live updates.
 
             reconnect_wait = round(
                 min(10 * connect_attempts * random.random(), MAX_RECONNECT_WAIT_S)  # noqa: S311
             )
 
             log.debug(
-                "[EVENT READER] WebSocket Disconnected - Reconnect attempt %s of %s will be attempted in %s seconds.",
+                "[EVENT READER] WebSocket Disconnected - Reconnect attempt %s will be attempted in %s seconds.",
                 connect_attempts,
-                MAX_CONNECTION_ATTEMPTS,
                 reconnect_wait,
             )
 

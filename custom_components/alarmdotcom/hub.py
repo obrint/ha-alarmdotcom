@@ -116,9 +116,12 @@ class AlarmHub:
             raise ConfigEntryNotReady("Could not connect to Alarm.com.") from err
         except pyadc.AuthenticationException as err:
             raise ConfigEntryAuthFailed from err
-        except Exception:
+        except Exception as err:
+            # Returning False here left the entry "Loaded" with no websocket, no periodic refresh and no retry
+            # (async_setup_entry ignores the return value). Not-ready makes Home Assistant retry setup with backoff,
+            # which is what a dropped connection or DNS failure during a reboot needs.
             log.exception("Unexpected error during Alarm.com initialization.")
-            return False
+            raise ConfigEntryNotReady("Unexpected error while connecting to Alarm.com.") from err
         finally:
             if not setup_ok:
                 await self.api.close()
@@ -241,6 +244,9 @@ class AlarmHub:
                 self.available = True
                 self._reconnect_attempts = 0
                 log.info("Alarm.com: reconnect successful.")
+                # initialize() skips controllers that are already set up, so nothing above re-fetched state.
+                # Anything that changed while disconnected would otherwise wait for the next periodic refresh.
+                await self._async_refresh_state()
                 return
 
         # All attempts exhausted — schedule a full entry reload.

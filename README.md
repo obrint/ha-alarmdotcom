@@ -7,6 +7,7 @@
 > - Session repair can no longer deadlock, a failed login backs off (60 s doubling to 30 min) instead of being retried by every request, outages are no longer reported as bad credentials, the websocket never stops reconnecting, and a network error during setup is retried.
 > - Setup no longer reads `DeviceEntry.config_entries`, which HA 2026.10 made expensive (ibasebcast/ha-alarmdotcom#109).
 > - A device is removed only after it is missing from three refreshes in a row, so one incomplete Alarm.com response cannot delete its entities.
+> - When a device really is gone from Alarm.com, its whole device is removed with every entity on it (trouble, malfunction, battery, debug), not just the main entity. A subscriber that raises no longer stops the event broker: a leftover entity of a removed partition used to make every reconnect and the config entry's unload fail, leaving the integration dead until a restart.
 > - Optional **Clear motion after** (integration options, minutes, default off): Alarm.com reports a NetworX motion zone once and only reports Idle after up to an hour, so each activation can instead be shown as a pulse of this length. Also fixes `Sensor.subtype` always being `None`, which kept motion events from mapping to active/idle.
 >
 > To pick up Selora's later work: `git fetch upstream && git rebase upstream/main`, run `pytest tests/`, then cut a release (see `scripts/release.py`; HACS installs the `alarmdotcom.zip` release asset).

@@ -12,7 +12,7 @@ import aiohttp
 from _pyalarmdotcomajax import AlarmBridge
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
-from homeassistant.core import CALLBACK_TYPE, HomeAssistant
+from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.event import async_track_time_interval
@@ -131,6 +131,10 @@ class AlarmHub:
 
         await self.api.start_event_monitoring(self._ws_state_handler)
 
+        self.close_jobs.append(
+            self.api.events.subscribe(pyadc.EventBrokerTopic.RESOURCE_DELETED, self._remove_deleted_device)
+        )
+
         # Periodic full state refresh as a safety net for missed websocket events
         full_state_interval_minutes = self.config_entry.options.get(
             CONF_FULL_STATE_POLL_INTERVAL, DEFAULT_POLLING_INTERVAL_MINUTES
@@ -157,6 +161,26 @@ class AlarmHub:
 
         self._reconnect_attempts = 0
         return True
+
+    @callback
+    def _remove_deleted_device(self, message: pyadc.EventBrokerMessage) -> None:
+        """
+        Remove a device Alarm.com no longer lists, together with every entity on it.
+
+        Only the device's main entity removed itself before. Its trouble, malfunction, battery and debug entities
+        stayed behind, and the ones still subscribed to the vanished resource raised on every connection event.
+        A delete only arrives after several refreshes in a row without the device (MISSING_REFRESHES_BEFORE_REMOVAL).
+        """
+        if not isinstance(message, pyadc.ResourceEventMessage):
+            return
+
+        device_registry = dr.async_get(self.hass)
+        device = device_registry.async_get_device_by_identifier((DOMAIN, message.id), self.config_entry.entry_id)
+        if device is None or device.entry_type == dr.DeviceEntryType.SERVICE:
+            return
+
+        log.info("Alarm.com no longer lists %s; removing device %s.", message.id, device.name_by_user or device.name)
+        device_registry.async_remove_device(device.id)
 
     async def _async_refresh_state(self, _now: datetime | None = None) -> None:
         """Periodically poll full state as a safety net against missed websocket events."""

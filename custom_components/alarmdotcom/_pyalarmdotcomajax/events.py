@@ -88,9 +88,16 @@ class EventBroker:
         return unsubscribe_all
 
     def publish(self, message: EventBrokerMessage) -> None:
-        """Publish a message to subscribers of a topic."""
+        """
+        Publish a message to subscribers of a topic.
 
-        for callback, ids in self._subscriptions.get(message.topic, {}).items():
+        A subscriber that raises is logged and skipped. Letting the exception escape stopped delivery to every later
+        subscriber, and since the websocket client and AlarmBridge.close() publish connection events, one broken
+        entity could kill every reconnect and make the config entry fail to unload.
+        """
+
+        # Snapshot: a callback may unsubscribe itself (or another) while we iterate.
+        for callback, ids in list(self._subscriptions.get(message.topic, {}).items()):
             if (
                 hasattr(message, "id")
                 and ids
@@ -98,12 +105,15 @@ class EventBroker:
             ):
                 continue
 
-            if asyncio.iscoroutinefunction(callback):
-                task = asyncio.create_task(callback(message))
-                self._background_tasks.add(task)
-                task.add_done_callback(self._background_tasks.discard)
-            else:
-                callback(message)
+            try:
+                if asyncio.iscoroutinefunction(callback):
+                    task = asyncio.create_task(callback(message))
+                    self._background_tasks.add(task)
+                    task.add_done_callback(self._background_tasks.discard)
+                else:
+                    callback(message)
+            except Exception:
+                log.exception("Subscriber %r failed on %s; continuing with the others.", callback, message.topic)
 
 
 #

@@ -7,6 +7,7 @@ from homeassistant.helpers.device_registry import (
     async_entries_for_config_entry,
 )
 from homeassistant.helpers.device_registry import async_get as async_get_device_registry
+from homeassistant.helpers.entity_registry import async_entries_for_device
 from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
 
 if TYPE_CHECKING:
@@ -65,13 +66,18 @@ async def cleanup_orphaned_entities_and_devices(
     for device in list(
         async_entries_for_config_entry(device_registry, config_entry.entry_id)
     ):
-        if (
-            device.config_entries == {config_entry.entry_id}
-            and device.entry_type != DeviceEntryType.SERVICE
-        ):
-            device_entities = [
-                e for e in entity_registry.entities.values() if e.device_id == device.id
-            ]
+        # HA >= 2026.8: a device has exactly one owner, DeviceEntry.config_entry_id.
+        # Never read DeviceEntry.config_entries there: from HA 2026.10 every read
+        # runs report_usage(), a full stack + sys.modules walk on the event loop.
+        owner = getattr(device, "config_entry_id", None)
+        if owner is not None:
+            owned = owner == config_entry.entry_id
+        else:  # HA < 2026.8, where a device could belong to several entries
+            owned = device.config_entries == {config_entry.entry_id}
+        if owned and device.entry_type != DeviceEntryType.SERVICE:
+            device_entities = async_entries_for_device(
+                entity_registry, device.id, include_disabled_entities=True
+            )
             # No entities at all, or only unidentified entities on this platform
             if not device_entities or all(
                 e.domain == platform and not e.unique_id for e in device_entities

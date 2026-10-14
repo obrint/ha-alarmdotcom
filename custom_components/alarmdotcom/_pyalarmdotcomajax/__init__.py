@@ -164,6 +164,10 @@ T = TypeVar("T", bound=JsonApiBaseElement)
 
 log = logging.getLogger(__name__)
 
+# How long a reconcile waits before fetching. Coalesces bursts (several zones changing at once, a reconnect that
+# lands with events) into one request, and lets an OpenedClosed pulse play out first.
+RECONCILE_DELAY_S = 3.0
+
 FORK_NAME = "ibasebcast"
 FORK_REPO = "https://github.com/ibasebcast/pyalarmdotcomajax"
 
@@ -188,6 +192,10 @@ class AlarmBridge:
 
         # Event Broker
         self.events = EventBroker()
+
+        # Debounced device re-fetch; see request_reconcile().
+        self._reconcile_task: asyncio.Task | None = None
+        self._reconcile_requested = False
 
         # Session
         self._websession: aiohttp.ClientSession | None = None
@@ -430,6 +438,44 @@ class AlarmBridge:
             await asyncio.gather(*refresh_tasks, return_exceptions=True)
 
 
+    def request_reconcile(self, reason: str, delay_s: float = RECONCILE_DELAY_S) -> None:
+        """
+        Re-fetch device state shortly, coalescing a burst of requests into one fetch.
+
+        WebSocket events are deltas with no replay, so any event that arrives while the socket is between
+        connections is lost, and an OpenedClosed event only implies that the sensor ended closed. Each of those
+        moments asks for a reconcile: one device-catalog request that carries every sensor, partition, lock,
+        etc., applied under BaseController's guard so it cannot undo an event that arrived after it was sent.
+        """
+
+        self._reconcile_requested = True
+
+        if self._reconcile_task is not None and not self._reconcile_task.done():
+            # The running task re-checks the flag after its fetch, so a request made while that fetch is in
+            # flight still gets a fetch that starts after it.
+            return
+
+        self._reconcile_task = asyncio.create_task(self._reconcile(reason, delay_s), name="Alarm.com reconcile")
+
+    async def _reconcile(self, reason: str, delay_s: float) -> None:
+        """Run requested reconciles until no new request arrived during the last fetch."""
+
+        while self._reconcile_requested:
+            await asyncio.sleep(delay_s)
+            self._reconcile_requested = False
+
+            if not self._initialized or not self._device_catalogs.initialized:
+                return
+
+            log.debug("Reconciling device state (%s).", reason)
+
+            try:
+                await self._device_catalogs._refresh()  # noqa: SLF001
+            except Exception:
+                # The periodic full refresh is the backstop; a failed reconcile must not take anything down.
+                log.debug("Reconcile failed (%s).", reason, exc_info=True)
+                return
+
     async def start_event_monitoring(
         self, ws_status_callback: EventBrokerCallbackT | None = None
     ) -> Callable | None:
@@ -649,6 +695,10 @@ class AlarmBridge:
         """Close connection and cleanup."""
 
         self._ws_controller.stop()
+
+        if self._reconcile_task is not None and not self._reconcile_task.done():
+            self._reconcile_task.cancel()
+        self._reconcile_task = None
 
         if self._websession:
             await self._websession.close()

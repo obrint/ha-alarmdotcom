@@ -262,6 +262,14 @@ class WebSocketClient:
                     self._set_state(
                         WebSocketState.CONNECTED if connect_attempts == 1 else WebSocketState.RECONNECTED,
                     )
+
+                    if connect_attempts == 1:
+                        # A first connection or a planned replacement. Neither emits RECONNECTED, so no
+                        # controller refreshes, yet events were lost in both gaps: between the initial state
+                        # fetch and this connection, and while the old connection closed and this one opened.
+                        # (RECONNECTED already triggers a full refresh in every controller.)
+                        self._bridge.request_reconcile("websocket connected")
+
                     connect_attempts = 1
 
                     log.info("[EVENT READER] Connected to WebSocket")

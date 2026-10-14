@@ -27,7 +27,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = ROOT / "custom_components" / "alarmdotcom" / "manifest.json"
-REPO_URL = "https://github.com/SeloraHomes/ha-alarmdotcom"
+REPO_URL = "https://github.com/obrint/ha-alarmdotcom"
 
 TAG = re.compile(r"^(\d{4})\.(\d{1,2})\.(\d{1,2})(?:\.(\d+))?(b\d+)?$")
 COMMIT = re.compile(r"^(?P<type>\w+)(?:\((?P<scope>[^)]+)\))?(?P<breaking>!)?: (?P<description>.+)$")

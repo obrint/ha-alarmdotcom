@@ -1,4 +1,13 @@
-# Alarm.com for Home Assistant
+# Alarm.com for Home Assistant (obrint fork)
+
+> **About this fork.** A personal fork of [SeloraHomes/ha-alarmdotcom](https://github.com/SeloraHomes/ha-alarmdotcom), installed through HACS as a custom repository. It carries reliability fixes for a 24/7 alarm on top of Selora's `main`:
+>
+> - The 5-minute safety-net refresh and the websocket-reconnect refresh re-fetch devices again. `set.pop()` emptied the device catalog's only target id on the first refresh, so neither ever refreshed a sensor or panel after setup, and one missed websocket event stayed wrong until a restart (same root cause as ibasebcast/ha-alarmdotcom#107).
+> - Device state is reconciled a few seconds after every websocket (re)connection, including the planned 4.5-minute token replacements, and after every OpenedClosed event. A refresh requested before a websocket event can no longer overwrite it.
+> - Session repair can no longer deadlock, a failed login backs off (60 s doubling to 30 min) instead of being retried by every request, outages are no longer reported as bad credentials, the websocket never stops reconnecting, and a network error during setup is retried.
+> - Setup no longer reads `DeviceEntry.config_entries`, which HA 2026.10 made expensive (ibasebcast/ha-alarmdotcom#109).
+>
+> To pick up Selora's later work: `git fetch upstream && git rebase upstream/main`, run `pytest tests/`, then cut a release (see `scripts/release.py`; HACS installs the `alarmdotcom.zip` release asset).
 
 This repository is the actively maintained home of the **Alarm.com for Home Assistant** custom integration, maintained by [Selora Homes](https://github.com/SeloraHomes).
 

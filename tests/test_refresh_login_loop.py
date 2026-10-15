@@ -115,3 +115,17 @@ def test_debug_dumps_do_not_carry_credentials() -> None:
     assert '"Accept": "application/json"' in headers
     assert body == {"ctl00$ContentPlaceHolder1$loginform$txtPassword": "***", "statePollOnly": False}
     assert _redacted_body("username=me&password=hunter2") == "***"
+
+
+async def test_a_controller_started_without_a_target_list_still_fetches() -> None:
+    """The systems controller starts with no target ids and must fetch every system; skipping it broke setup."""
+    from _pyalarmdotcomajax.controllers.systems import SystemController  # noqa: PLC0415
+    from _pyalarmdotcomajax.events import EventBroker  # noqa: PLC0415
+
+    bridge = MagicMock()
+    bridge.events = EventBroker()
+    bridge.get = AsyncMock(side_effect=RuntimeError("fetched"))
+    controller = SystemController(bridge)  # type: ignore[arg-type]
+
+    with pytest.raises(RuntimeError, match="fetched"):
+        await controller.initialize()

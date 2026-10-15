@@ -149,6 +149,7 @@ class BaseController(ABC, Generic[AdcResourceT]):
         # Restricts this controller to specific devices. Used for controllers that only support single-serve
         # endpoints.
         self._target_device_ids: set[str] = set({})
+        self._has_no_devices = False
 
         # Holds references to asyncio tasks to prevent them from being garbage collected before completion.
         self._background_tasks: set[Task] = set()
@@ -212,6 +213,7 @@ class BaseController(ABC, Generic[AdcResourceT]):
             # If this is a device controller and no device IDs are provided, mark as initialized and skip
             if getattr(self, "_is_device_controller", False) and not self._target_device_ids:
                 self._initialized = True
+                self._has_no_devices = True
                 return
 
         self._initialized = True
@@ -222,6 +224,7 @@ class BaseController(ABC, Generic[AdcResourceT]):
         """Add a device ID to the controller's list of targets."""
 
         self._target_device_ids.add(resource_id)
+        self._has_no_devices = False
 
         await self._refresh(resource_id=resource_id)
 
@@ -298,9 +301,10 @@ class BaseController(ABC, Generic[AdcResourceT]):
         if (self._api_data_provider and not pre_fetched) or (self._requires_target_ids and not self._target_device_ids):
             return
 
-        # initialize() skips a device controller that has no devices; the periodic refresh has to as well. Asking
-        # for a device type the system does not have can earn a 423 (image sensors do), every five minutes.
-        if not pre_fetched and not resource_id and self._is_device_controller and not self._target_device_ids:
+        # initialize() skips a device controller that was told the system has none of its devices; the periodic
+        # refresh has to as well. Asking for a device type the system does not have can earn a 423 (image sensors
+        # do), every five minutes. Only that case: controllers started without a target list (systems) fetch all.
+        if not pre_fetched and not resource_id and self._has_no_devices:
             return
 
         if not pre_fetched:

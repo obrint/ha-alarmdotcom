@@ -183,6 +183,34 @@ LOGIN_BACKOFF_MAX_S = 30 * 60
 # lands with events) into one request, and lets an OpenedClosed pulse play out first.
 RECONCILE_DELAY_S = 3.0
 
+
+# Debug dumps go to the Home Assistant log, which people paste into issues. They must not carry the session cookies,
+# the anti-forgery key, the two-factor device token or the login form's password.
+_SENSITIVE_HEADERS = frozenset({"cookie", "set-cookie", "ajaxrequestuniquekey", "authorization"})
+_SENSITIVE_BODY_KEYS = ("password", "pass", "user", "token", "code", "otp", "viewstate", "eventvalidation")
+
+
+def _redacted_headers(headers: Any) -> str:
+    """Return headers as JSON with credentials replaced."""
+
+    return json.dumps(
+        {key: "***" if key.lower() in _SENSITIVE_HEADERS else value for key, value in dict(headers).items()}
+    )
+
+
+def _redacted_body(body: Any) -> Any:
+    """Return a request body with credential-like fields replaced; bodies that are not a mapping are hidden whole."""
+
+    if not body:
+        return body
+    if isinstance(body, dict):
+        return {
+            key: "***" if any(part in str(key).lower() for part in _SENSITIVE_BODY_KEYS) else value
+            for key, value in body.items()
+        }
+    return "***"
+
+
 FORK_NAME = "ibasebcast"
 FORK_REPO = "https://github.com/ibasebcast/pyalarmdotcomajax"
 
@@ -534,10 +562,15 @@ class AlarmBridge:
 
         # One controller failing must not stop the others, but an authentication failure has to reach the
         # caller: it is how the hub learns that the session cannot be repaired and reauthentication is needed.
+        # NotAuthorized is not one. It is Alarm.com's 406/423 for an endpoint this account cannot use (a feature
+        # missing from the plan, a device type disabled), and the session is fine. Passing it up made the hub log in
+        # again every few minutes for as long as that endpoint kept refusing.
         for result in results:
-            if isinstance(result, AuthenticationException):
+            if isinstance(result, AuthenticationException) and not isinstance(result, NotAuthorized):
                 raise result
-            if isinstance(result, Exception):
+            if isinstance(result, NotAuthorized):
+                log.debug("A controller refresh was refused by Alarm.com (not a login problem): %s", result)
+            elif isinstance(result, Exception):
                 log.debug("A controller refresh failed: %r", result)
 
 
@@ -948,9 +981,9 @@ class AlarmBridge:
                     resp.request_info.method,
                     resp.status,
                     url,
-                    json.dumps(dict(resp.request_info.headers)),
-                    kwargs.get("data") or kwargs.get("json"),
-                    json.dumps(dict(resp.headers)),
+                    _redacted_headers(resp.request_info.headers),
+                    _redacted_body(kwargs.get("data") or kwargs.get("json")),
+                    _redacted_headers(resp.headers),
                     resp_dump[:DEBUG_REQUEST_DUMP_MAX_LEN]
                     + "..." * (len(resp_dump) > DEBUG_REQUEST_DUMP_MAX_LEN),
                     url,

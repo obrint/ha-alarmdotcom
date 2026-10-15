@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import logging
+import time
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta
 from typing import Any
@@ -38,6 +39,10 @@ DEFAULT_POLLING_INTERVAL_MINUTES = CONF_OPTIONS_DEFAULT[CONF_FULL_STATE_POLL_INT
 # Reconnect backoff: wait this long before reloading after a websocket death
 WS_RECONNECT_DELAY = 30  # seconds
 WS_MAX_RECONNECT_ATTEMPTS = 5
+# A refresh that fails with an authentication error reconnects, which logs in again. A refresh that keeps failing that
+# way after a successful login would otherwise log in every few minutes; each login also signs the account's browser
+# sessions out. Between two such reconnects the periodic refresh simply tries again later.
+REFRESH_AUTH_RECONNECT_MIN_INTERVAL_S = 10 * 60
 
 WS_HEARTBEAT_INTERVAL = 60  # seconds
 
@@ -82,6 +87,7 @@ class AlarmHub:
         self.available: bool = True
         self._reconnect_attempts: int = 0
         self._reconnect_task: asyncio.Task | None = None
+        self._last_refresh_auth_reconnect: float | None = None
 
         hass.data.setdefault(DOMAIN, {})[self.config_entry.entry_id] = {DATA_HUB: self}
 
@@ -193,7 +199,21 @@ class AlarmHub:
             # WebSocket reconnects, so it actually re-fetches and re-publishes state every time
             # this runs instead of being a silent no-op.
             await self.api.refresh_all_resources()
+        except pyadc.NotAuthorized as err:
+            # 406/423: an endpoint this account may not use. The session is fine, so logging in again cannot help.
+            log.debug("Alarm.com: periodic refresh refused by Alarm.com: %s", err)
         except pyadc.AuthenticationException:
+            now = time.monotonic()
+            if (
+                self._last_refresh_auth_reconnect is not None
+                and now - self._last_refresh_auth_reconnect < REFRESH_AUTH_RECONNECT_MIN_INTERVAL_S
+            ):
+                log.warning(
+                    "Alarm.com: periodic refresh failed — auth error again soon after reconnecting. "
+                    "Not logging in again yet; the next refresh will retry."
+                )
+                return
+            self._last_refresh_auth_reconnect = now
             log.warning("Alarm.com: periodic refresh failed — auth error. Will attempt reconnect.")
             await self._async_handle_ws_death()
         except Exception as err:

@@ -298,6 +298,11 @@ class BaseController(ABC, Generic[AdcResourceT]):
         if (self._api_data_provider and not pre_fetched) or (self._requires_target_ids and not self._target_device_ids):
             return
 
+        # initialize() skips a device controller that has no devices; the periodic refresh has to as well. Asking
+        # for a device type the system does not have can earn a 423 (image sensors do), every five minutes.
+        if not pre_fetched and not resource_id and self._is_device_controller and not self._target_device_ids:
+            return
+
         if not pre_fetched:
             ids: str | set[str] | None = None
 

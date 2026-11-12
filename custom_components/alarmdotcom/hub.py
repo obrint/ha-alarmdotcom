@@ -30,6 +30,9 @@ from .const import (
 
 log = logging.getLogger(__name__)
 
+# Seconds allowed for login and the first device load during setup. See AlarmHub.initialize.
+SETUP_TIMEOUT_S = 60
+
 # Default full-state poll interval (minutes), used until a user configures
 # their own via the options flow (see config_flow.py's
 # ADCOptionsFlowHandler.async_step_polling) - a safety net against missed
@@ -114,7 +117,10 @@ class AlarmHub:
         setup_ok = False
 
         try:
-            async with asyncio.timeout(10):
+            # Login plus the first load of every device. 10 s was not enough on an account with ~180 entities:
+            # after a Home Assistant restart or an entry reload every attempt died at exactly 10 s, and the
+            # entry sat in setup_retry for minutes (each retry is a fresh login) until one happened to finish.
+            async with asyncio.timeout(SETUP_TIMEOUT_S):
                 await self.api.initialize()
             setup_ok = True
         except (
@@ -122,7 +128,13 @@ class AlarmHub:
             pyadc.UnexpectedResponse,
             pyadc.ServiceUnavailable,
         ) as err:
-            raise ConfigEntryNotReady("Could not connect to Alarm.com.") from err
+            # Say what failed: the entry's "not ready" reason is the only place most people look.
+            detail = (
+                f"timed out after {SETUP_TIMEOUT_S} s"
+                if isinstance(err, TimeoutError)
+                else f"{type(err).__name__}: {err}".rstrip(": ")
+            )
+            raise ConfigEntryNotReady(f"Could not connect to Alarm.com ({detail}).") from err
         except pyadc.AuthenticationException as err:
             raise ConfigEntryAuthFailed from err
         except Exception as err:
